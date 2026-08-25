@@ -1,0 +1,146 @@
+# SkyReelsV2-GR00T **video + action co-training** on LIBERO 4-in-1, lerobot v3 data.
+#
+# SkyReels-V2 DF-1.3B world-model backbone (Wan2.1-1.3B DiT, diffusion forcing) + GR00T N1.5
+# FlowmatchingActionHead, but instead of querying every frame clean at t=0 (action-loss only),
+# it runs ONE forward pass with per-frame noise: the obs/history frame(s) stay clean (τ=0) and
+# feed the action head, while ONE future frame is noised (τ~p(t)) and
+# supervised by the native SkyReels flow-matching VIDEO loss. Both losses backprop into the same
+# θ (no detach) → real bidirectional synergy. See glancewam/model/framework/wam/CotrainBaseline.py.
+#
+# Key deltas vs an action-loss-only recipe on the same backbone:
+#   - framework.name = CotrainBaseline, plus a framework.video_cotrain block.
+#   - The dataloader returns a 2-frame window: the obs frame and the single future frame at
+#     t+future_frame_idx native rows (LIBERO is 20 Hz, so t+8 = 0.4 s).
+#   - LIVE encoders (no VAE cache): the obs+future window is encoded by the Wan VAE every step
+#     (the full obs+future window is decoded live), so skip_vae=False.
+#     Text stays cached (UMT5 frozen) via the resident text table, set in the launcher.
+#   - truncate_at_extract MUST stay off (co-training reads the full-stack DiT velocity).
+#
+# CAMERA LAYOUT (LIBERO): two cameras (primary + wrist) stitched side-by-side into one wide
+# 224x448 frame (camera_concat=side_by_side, DiT4DiT parity), so vae_input_size=[224,448].
+datasets:
+  vla_data:
+    dataset_py: lerobot_datasets
+    lerobot_version: v3.0
+    data_root_dir: results/Datasets
+    data_mix: libero_all
+    image_size:
+    - 224
+    - 224
+    # Co-training runs a heavier step (full 30-block DiT on a 13-frame 224x448 window, no
+    # truncation, live VAE). Start small; raise if VRAM allows. Launcher overrides this.
+    per_device_batch_size: 16
+    num_workers: 16
+    video_backend: torchcodec
+    # Chunk length is owned by framework.action_model.action_horizon; mirror it here so the
+    # dataloader returns matching-length action tensors.
+    action_horizon: ${framework.action_model.action_horizon}
+    # Obs/history frames — owned by framework.world_model.num_history_frames.
+    num_history_frames: ${framework.world_model.num_history_frames}
+    # The ONE future frame the DiT predicts, at t+future_frame_idx NATIVE rows (LIBERO is
+    # 20 Hz, so 8 -> 0.4 s). Same units as action_horizon above; independent of it.
+    future_frame_idx: 8
+    # Camera packing — owned by framework.world_model.camera_concat so the dataloader
+    # (_pack_sample), the world model, and the VAE cache agree.
+    camera_concat: ${framework.world_model.camera_concat}
+    # No offline VAE cache: co-training encodes the obs+future window live (a multi-frame VAE
+    # cache is too large). Text is cached separately via the resident table (launcher).
+    t5_cache:
+      enabled: false
+framework:
+  name: CotrainBaseline
+  world_model:
+    base_wm: Skywork/SkyReels-V2-DF-1.3B-540P-Diffusers
+    num_history_frames: 1
+    # side_by_side: stitch primary|wrist into one wide 224x448 frame (DiT4DiT parity).
+    camera_concat: side_by_side
+    vae_input_size: [224, 448]
+    # Which DiT block feeds the action head (-1 = last of 30). The full stack always runs
+    # (truncate_at_extract off) because the video loss needs the final velocity.
+    extract_layers:
+    - -1
+    combine_layers: concat_tokens
+    truncate_at_extract: false
+    # LIVE VAE — co-training does not use the offline VAE cache.
+    skip_vae: false
+    skip_text_encoder: false
+    fps: 24
+    text_max_length: 512
+    # PEFT LoRA on the video DiT. Off = full-finetune the DiT (so the video loss reshapes θ).
+  video_cotrain:
+    enabled: true
+    # Weight on the video flow-matching loss in total = action + lambda * video.
+    lambda: 1.0
+    # No future-window knob here: WHICH frame is predicted is datasets.vla_data.future_frame_idx
+    # above, in the same native rows as action_horizon. Mirroring it in two places is what let
+    # the window and the chunk silently drift.
+    #
+    # Sizing caveat, measured and still live: LIBERO episodes are short (median 105 frames), so a
+    # far index wastes supervision — at t+48 (46% of a median episode) 39% of windows had their
+    # future frame clamped to the episode's last frame, i.e. a static, action-independent
+    # end-state target. Keep future_frame_idx well inside the episode length.
+    # Per-frame noise for the future frame: uniform (SkyReels FoPP) | logitnormal (Cosmos).
+    sigma_sampling: uniform
+    # Prefix-LM FlexAttention mask: clean obs frames isolated from the noised future
+    # (the validated "causal attn + clean condition" experiment). Degenerates to full
+    # attention at eval (all τ=0), so the policy path is unchanged.
+    clean_prefix_isolation: true
+  action_model:
+    # GR00T N1.5 FlowmatchingActionHead (single-stream). cross_attention_dim is
+    # auto-aligned to the WM hidden size (1536) at framework init.
+    action_model_type: DiT-B
+    action_dim: 7
+    state_dim: 7
+    action_horizon: 8
+    add_pos_embed: true
+    diffusion_model_cfg:
+      cross_attention_dim: 1536
+      num_layers: 16
+      output_dim: 1024
+      dropout: 0.2
+      final_dropout: true
+      interleave_self_attention: true
+      norm_type: ada_norm
+      positional_embeddings: null
+    max_seq_len: 1024
+    noise_beta_alpha: 1.5
+    noise_beta_beta: 1.0
+    noise_s: 0.999
+    num_inference_timesteps: 4
+    num_target_vision_tokens: 32
+    num_timestep_buckets: 1000
+    repeated_diffusion_steps: 8
+run_id: libero_4in1_CotrainBaseline
+run_root_dir: ./results/Checkpoints
+wandb_dir: ./results/wandb_local
+seed: 42
+trainer:
+  ema:
+    enabled: false
+    decay: 0.999
+    warmup: true
+    start_step: 0
+    device: cuda
+  eval_interval: 1000
+  freeze_modules: ''
+  gradient_clipping: 1.0
+  is_resume: false
+  learning_rate:
+    action_model: 0.0001
+    base: 1.0e-05
+  logging_frequency: 100
+  lr_scheduler_type: cosine_with_min_lr
+  max_train_steps: 80000
+  scheduler_total_steps: 100000
+  num_warmup_steps: 5000
+  optimizer:
+    betas:
+    - 0.9
+    - 0.95
+    eps: 1.0e-08
+    weight_decay: 1.0e-08
+  save_interval: 10000
+  scheduler_specific_kwargs:
+    min_lr: 5.0e-07
+wandb_entity: linhan2-virginia-tech
+wandb_project: GlanceWAM_LIBERO

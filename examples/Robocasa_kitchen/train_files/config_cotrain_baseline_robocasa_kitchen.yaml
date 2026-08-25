@@ -1,0 +1,129 @@
+# SkyReelsV2-GR00T **video + action co-training** on RoboCasa KITCHEN (cosmos-policy
+# 24 tasks), lerobot v3 data. PandaOmron / single Franka arm.
+#
+# Sibling of examples/LIBERO/train_files/config_cotrain_baseline_libero.yaml and
+# SkyReels-V2 DF-1.3B world-model backbone (Wan2.1-1.3B DiT, diffusion forcing) + GR00T N1.5
+# FlowmatchingActionHead: ONE forward with per-frame noise — obs/history frame(s) stay clean
+# (τ=0) and feed the action head, ONE future frame is noised (τ~p(t)) and
+# supervised by the SkyReels flow-matching VIDEO loss; both losses backprop into the same θ.
+#
+# CAMERA LAYOUT (RoboCasa kitchen): THREE cameras — primary (agentview_left),
+# secondary (agentview_right), wrist (eye_in_hand). The single-stream world model packs them
+# via camera_concat=side_by_side (default): all three at full 224² left-to-right → one 672×224
+# (WxH) frame, so vae_input_size=[224, 672]. Validated +0.07 SR over the legacy primary_inset
+# layout (112² insets), whose downsampled wrist view was the small-target-task bottleneck.
+#
+# Recipe mirrors the LIBERO cosmos cotrain: STATELESS (include_state defaults off; the action
+# head learns from obs tokens), action min_max-normalized on the 6 OSC pose dims (gripper raw),
+# LIVE Wan VAE encode of the obs+future window, UMT5 text served from the resident table.
+datasets:
+  vla_data:
+    dataset_py: lerobot_datasets
+    lerobot_version: v3.0
+    data_root_dir: results/Datasets/robocasa_cosmos_kitchen
+    data_mix: robocasa_kitchen_all
+    image_size:
+    - 224
+    - 224
+    # Co-training runs a heavy step (full 30-block DiT on a 13-frame 336x224 window, no
+    # truncation, live VAE). Start small; the launcher overrides this.
+    per_device_batch_size: 16
+    num_workers: 16
+    video_backend: torchcodec
+    action_horizon: ${framework.action_model.action_horizon}
+    num_history_frames: ${framework.world_model.num_history_frames}
+    # The ONE future frame the DiT predicts, at t+future_frame_idx NATIVE rows from the obs
+    # frame (native is 20 Hz, so 16 -> 0.8 s, 32 -> 1.6 s). Denominated exactly like
+    # action_horizon above, so the two are directly comparable and INDEPENDENT: set them equal
+    # to keep the action-conditioning token describing the whole predicted interval (the
+    # dataloader warns when they differ and conditioning is on). The launcher overrides this.
+    future_frame_idx: 16
+    camera_concat: ${framework.world_model.camera_concat}
+    t5_cache:
+      enabled: false
+framework:
+  name: CotrainBaseline
+  world_model:
+    base_wm: Skywork/SkyReels-V2-DF-1.3B-540P-Diffusers
+    num_history_frames: 1
+    # side_by_side: 3 cameras full-res (primary | secondary | wrist) -> one 672x224 frame.
+    # (legacy: primary_inset = primary 224² + secondary & wrist 112² insets -> 336x224.)
+    camera_concat: side_by_side
+    vae_input_size: [224, 672]
+    extract_layers:
+    - -1
+    combine_layers: concat_tokens
+    truncate_at_extract: false
+    skip_vae: false
+    skip_text_encoder: false
+    fps: 24
+    text_max_length: 512
+  video_cotrain:
+    enabled: true
+    lambda: 1.0
+    # No future-window knob here: WHICH frame is predicted is datasets.vla_data.future_frame_idx
+    # above. Mirroring it in two places is what let the window and the action chunk silently
+    # drift (kitchen trained a t+48 window against a 16-row chunk for weeks).
+    sigma_sampling: uniform
+    clean_prefix_isolation: true
+  action_model:
+    # GR00T N1.5 FlowmatchingActionHead (single-stream). cross_attention_dim is
+    # auto-aligned to the WM hidden size (1536) at framework init.
+    action_model_type: DiT-B
+    action_dim: 7
+    # state_dim matches the 9-dim cosmos proprio; unused while stateless (include_state off),
+    # wired so flipping --datasets.vla_data.include_state True is a one-line change.
+    state_dim: 9
+    action_horizon: 16
+    add_pos_embed: true
+    diffusion_model_cfg:
+      cross_attention_dim: 1536
+      num_layers: 16
+      output_dim: 1024
+      dropout: 0.2
+      final_dropout: true
+      interleave_self_attention: true
+      norm_type: ada_norm
+      positional_embeddings: null
+    max_seq_len: 1024
+    noise_beta_alpha: 1.5
+    noise_beta_beta: 1.0
+    noise_s: 0.999
+    num_inference_timesteps: 4
+    num_target_vision_tokens: 32
+    num_timestep_buckets: 1000
+    repeated_diffusion_steps: 8
+run_id: robocasa_kitchen_CotrainBaseline
+run_root_dir: ./results/Checkpoints
+wandb_dir: ./results/wandb_local
+seed: 42
+trainer:
+  ema:
+    enabled: false
+    decay: 0.999
+    warmup: true
+    start_step: 0
+    device: cuda
+  eval_interval: 1000
+  freeze_modules: ''
+  gradient_clipping: 1.0
+  is_resume: false
+  learning_rate:
+    action_model: 0.0001
+    base: 1.0e-05
+  logging_frequency: 100
+  lr_scheduler_type: cosine_with_min_lr
+  max_train_steps: 80000
+  scheduler_total_steps: 100000
+  num_warmup_steps: 5000
+  optimizer:
+    betas:
+    - 0.9
+    - 0.95
+    eps: 1.0e-08
+    weight_decay: 1.0e-08
+  save_interval: 10000
+  scheduler_specific_kwargs:
+    min_lr: 5.0e-07
+wandb_entity: linhan2-virginia-tech
+wandb_project: GlanceWAM_Robocasa_kitchen

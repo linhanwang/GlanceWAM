@@ -1,0 +1,163 @@
+[build-system]
+requires = ["setuptools"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "glancewam"
+authors = [
+    {name = "Linhan Wang", email="wanglinhan.pku@gmail.com"},
+]
+description = "GlanceWAM: video world models as backbones for vision-language-action policies."
+version = "0.1.0"
+readme = "README.md"
+requires-python = "==3.11.*"
+keywords = ["vision-language-action models", "robotic manipulation", "world models", "robot learning", "video diffusion"]
+license = {file = "LICENSE"}
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Education",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+"Programming Language :: Python :: 3 :: Only",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+dependencies = [
+    # cu128 wheels — see [tool.uv.sources] below
+    "torch==2.10.0",
+    "torchvision==0.25.0",
+    "torchaudio==2.10.0",
+    "transformers==4.57.0",
+    "accelerate==1.5.2",
+    # 0.16.x predates torch 2.10 API changes; bumped to match cu128 stack.
+    "deepspeed>=0.18.0",
+    "einops",
+    "setuptools==80.9.0",
+    "pillow",
+    "matplotlib",
+    "websockets",
+    "albumentations==1.4.18",
+    "pipablepytorch3d==0.7.6",
+    # Upstream `decord==0.6.0` has no cp311 wheels on PyPI. eva-decord 0.6.1 is the
+    # maintained fork; ships cp311 wheels and registers as `import decord`
+    # (glancewam/dataloader/gr00t_lerobot/video.py).
+    "eva-decord==0.6.1",
+    "pydantic==2.10.6",
+    "pandas",
+    "pyarrow==14.0.1",
+    "fastparquet==2024.11.0",
+    "av==12.3.0",
+    # LeRobot v3 datasets are read via torchcodec (random-access AV1 decode).
+    # 0.11.x targets a torch 2.11 ABI symbol our torch 2.10 doesn't export, so
+    # pin to 0.10.0. Runtime ffmpeg 6 .so files come from PyAV's wheel via
+    # tools/setup_ffmpeg6_shim.py — the av pin above keeps those bundled libs.
+    "torchcodec==0.10.0",
+    "numpydantic==1.6.9",
+    "omegaconf",
+    "numpy==1.26.4",
+    "wandb",
+    "rich",
+    "diffusers",
+    "tyro",
+    # Upper cap matches the bound transformers 4.57.0 enforces (<1.0).
+    "huggingface_hub>=0.34,<1.0",
+    # Zarr v3 (sharded arrays) for the offline UMT5 text cache under
+    # `<dataset>/glancewam_cache/`. v3 sharding gives 1 file per shard with random
+    # sub-chunk reads instead of v2's 1 file per chunk.
+    "zarr>=3,<4",
+    "numcodecs>=0.13",
+]
+
+[project.optional-dependencies]
+dev = [
+    "black>=24.2.0",
+    "gpustat",
+    "ipython",
+    "pre-commit",
+    "ruff>=0.2.2",
+]
+
+
+[tool.uv]
+index-strategy = "unsafe-best-match"
+
+[[tool.uv.index]]
+name = "pytorch-cu128"
+url = "https://download.pytorch.org/whl/cu128"
+explicit = true
+
+[tool.uv.sources]
+torch = { index = "pytorch-cu128" }
+torchvision = { index = "pytorch-cu128" }
+torchaudio = { index = "pytorch-cu128" }
+diffusers = { git = "https://github.com/huggingface/diffusers.git", rev = "4ca863323d550842e7d0122efd57d84d9b75d1cf" }
+
+
+[tool.setuptools.packages.find]
+where = ["."]
+exclude = [
+    "tests",         # test directory
+    "tests.*",
+    "cache",         # cache directory
+    "cache.*",
+    "playground",    # playground directory (contains symlinks to Datasets, Models)
+    "playground.*",
+    "results",       # result directory
+    "results.*",
+    "checkpoints",   # model checkpoint
+    "checkpoints.*",
+    "scripts",       # script directory
+    "scripts.*",
+    "eval",          # evaluation related directory
+    "eval.*",
+    "assets",        # assets directory
+    "assets.*",
+    "**bar**",           # bar directory
+    "bar.*",
+    ".vscode",       # VS Code configuration directory
+    "*.egg-info",    # egg-info metadata directory
+    "**__pycache__**",   # Python cache directory
+    "*.pyc",         # compiled Python file
+    "*.pyo",         # optimized Python file
+    "glancewam.egg-info",
+    "glancewam.egg-info.*",
+]
+
+[tool.black]
+line-length = 121
+target-version = ["py311"]
+preview = true
+
+[tool.ruff]
+line-length = 121
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["A", "B", "E", "F", "I", "RUF", "W"]
+ignore = [
+    "F722",     # forward-annotation syntax (jaxtyping-style shape annotations)
+    "E501",     # line length is enforced by black (121), which allows long strings/URLs
+    "E402",     # sys.path setup before imports in the eval clients and __main__ blocks
+    "RUF012",   # ClassVar annotations on dataclass-style config defaults
+    "RUF001",   # the codebase uses unicode in prose: θ, σ, ×, →, ≈
+    "RUF002",
+    "RUF003",
+    "B905",     # zip(strict=) is a deliberate opt-out where lengths are asserted upstream
+    "B006",     # mutable defaults in vendored NVIDIA/GR00T signatures
+    "B008",
+    "B904",     # re-raise chaining in vendored code
+    "B007",
+    "A001",     # `id`/`input`/`type` shadowing in vendored dataloader code
+    "A002",
+    "RUF005",
+    "RUF013",
+    "RUF046",
+    "RUF059",
+    "E721",
+    "F601",
+    "F841",
+]
+
+[tool.ruff.lint.per-file-ignores]
+"__init__.py" = ["E402", "F401"]

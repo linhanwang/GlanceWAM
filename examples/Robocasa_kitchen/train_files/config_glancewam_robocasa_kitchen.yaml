@@ -1,0 +1,143 @@
+# SkyReelsV2-GR00T **GOAL-IMAGE co-training** on RoboCasa KITCHEN (cosmos-policy 24 tasks),
+# lerobot v3 data. PandaOmron / single Franka arm. The low level of the goal-image planner
+#.
+#
+# Clone of config_cotrain_baseline_robocasa_kitchen.yaml (the plain-cotrain fBC 0.680
+# champion's recipe) with ONE addition: the action head conditions on a GOAL IMAGE. Trained
+# from the raw SkyReels-V2 DF checkpoint on the FULL demo set; eval is the standard 24-task
+# closed loop (the video DiT self-generates the goal — see GlanceWAM).
+#
+# What changes vs the plain cotrain (everything else is bit-identical):
+#   - framework.name -> GlanceWAM
+#   - framework.goal_conditioning added (the delta).
+#   - The window ships a SECOND future frame: the video branch trains at the FIXED horizon
+#     future_frame_idx (H_g, the goal-generation horizon), while the action head conditions on
+#     a hindsight GOAL frame drawn per sample at g ~ U(0, H_g] (goal_frame_range), the
+#     distribution it faces mid-cycle at inference (the plan's cadence rule).
+#
+# HORIZON (Q1, a knob): native is 20 Hz, so H_g = 3 s -> 60 native rows. future_frame_idx=60
+# is the video target / goal-generation horizon; goal_frame_range=[1,60] is the (0, H_g]
+# action-head goal offset. action_horizon stays 16 (0.8 s chunks).
+#
+# CAMERA LAYOUT (RoboCasa kitchen): 3 cams (primary/secondary/wrist) packed side_by_side to
+# one 672x224 frame (vae_input_size=[224,672]) — same as the champion. STATELESS.
+datasets:
+  vla_data:
+    dataset_py: lerobot_datasets
+    lerobot_version: v3.0
+    data_root_dir: results/Datasets/robocasa_cosmos_kitchen
+    data_mix: robocasa_kitchen_all
+    image_size:
+    - 224
+    - 224
+    per_device_batch_size: 16
+    num_workers: 16
+    video_backend: torchcodec
+    action_horizon: ${framework.action_model.action_horizon}
+    num_history_frames: ${framework.world_model.num_history_frames}
+    # The video-target future frame the DiT predicts (H_g, the goal-generation horizon),
+    # at t+future_frame_idx NATIVE rows (20 Hz -> 60 = 3 s). The launcher may override.
+    future_frame_idx: 60
+    # Goal-image cotrain: a SECOND future frame — the hindsight goal the action head
+    # conditions on, drawn per sample at g ~ U{1..60} native rows ((0, H_g], the cadence
+    # rule). Appended after the future slot; needs future_frame_idx > 0; incompatible with
+    # the VAE cache (kitchen live-decodes).
+    goal_frame_range:
+    - 1
+    - 60
+    # Data-efficiency ablation: keep only N demo episodes per task dataset
+    # (deterministic per-task subset; 0 = off = the full ~50/task demo set).
+    max_episodes_per_dataset: 0
+    camera_concat: ${framework.world_model.camera_concat}
+    t5_cache:
+      enabled: false
+framework:
+  name: GlanceWAM
+  world_model:
+    base_wm: Skywork/SkyReels-V2-DF-1.3B-540P-Diffusers
+    num_history_frames: 1
+    camera_concat: side_by_side
+    vae_input_size: [224, 672]
+    extract_layers:
+    - -1
+    combine_layers: concat_tokens
+    truncate_at_extract: false
+    skip_vae: false
+    skip_text_encoder: false
+    fps: 24
+    text_max_length: 512
+  video_cotrain:
+    enabled: true
+    lambda: 1.0
+    sigma_sampling: uniform
+    clean_prefix_isolation: true
+  goal_conditioning:
+    enabled: true
+    # Per-sample probability of zeroing the goal tokens fed to the action head (keeps a
+    # no-goal fallback in-distribution for the eval control arm, which targets ~0.680).
+    dropout_p: 0.1
+    # Video-DiT flow-matching sampler steps used to GENERATE the goal latent at inference
+    # (predict_action). Eval-only; higher = better goal, slower refresh.
+    goal_gen_steps: 10
+    # Sinusoidal embedding width for the goal-time diff g (native rows between the goal
+    # frame and the current obs) added to the goal tokens, so the action head knows HOW FAR
+    # AHEAD the goal is (trains on g ~ U(0,H_g]; at inference g shrinks within each refresh
+    # cycle). 0 disables the diff conditioning.
+    h_embed_dim: 16
+  action_model:
+    action_model_type: DiT-B
+    action_dim: 7
+    state_dim: 9
+    action_horizon: 16
+    add_pos_embed: true
+    diffusion_model_cfg:
+      cross_attention_dim: 1536
+      num_layers: 16
+      output_dim: 1024
+      dropout: 0.2
+      final_dropout: true
+      interleave_self_attention: true
+      norm_type: ada_norm
+      positional_embeddings: null
+    max_seq_len: 1024
+    noise_beta_alpha: 1.5
+    noise_beta_beta: 1.0
+    noise_s: 0.999
+    num_inference_timesteps: 4
+    num_target_vision_tokens: 32
+    num_timestep_buckets: 1000
+    repeated_diffusion_steps: 8
+run_id: robocasa_kitchen_GlanceWAM
+run_root_dir: ./results/Checkpoints
+wandb_dir: ./results/wandb_local
+seed: 42
+trainer:
+  ema:
+    enabled: false
+    decay: 0.999
+    warmup: true
+    start_step: 0
+    device: cuda
+  eval_interval: 1000
+  freeze_modules: ''
+  gradient_clipping: 1.0
+  is_resume: false
+  learning_rate:
+    action_model: 0.0001
+    base: 1.0e-05
+  logging_frequency: 100
+  lr_scheduler_type: cosine_with_min_lr
+  max_train_steps: 80000
+  scheduler_total_steps: 100000
+  num_warmup_steps: 5000
+  optimizer:
+    betas:
+    - 0.9
+    - 0.95
+    eps: 1.0e-08
+    weight_decay: 1.0e-08
+  save_interval: 10000
+  scheduler_specific_kwargs:
+    min_lr: 5.0e-07
+wandb_entity: linhan2-virginia-tech
+wandb_project: GlanceWAM_Robocasa_kitchen

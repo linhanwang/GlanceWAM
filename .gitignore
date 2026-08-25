@@ -1,0 +1,62 @@
+# Byte-compiled / optimized
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Distribution / packaging
+build/
+dist/
+develop-eggs/
+eggs/
+.eggs/
+sdist/
+wheels/
+*.egg-info/
+*.egg
+MANIFEST
+
+# Environments
+.venv
+venv/
+env/
+ENV/
+.python-version
+
+# Caches
+.cache
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.ipynb_checkpoints
+
+# Secrets
+.env
+.hf_token
+.wandb_api_key
+.*_token
+.*api_key
+.netrc
+
+# IDE / OS
+.idea/
+.vscode/
+.DS_Store
+
+# Run outputs: checkpoints, datasets, pretrained models, wandb, eval artifacts
+results/
+wandb/
+nohup.out
+*.out
+**/*.log
+MUJOCO_LOG.TXT
+
+# Scratch dirs — drop throwaway scripts here without polluting the repo
+**/bar/
+
+# Large binaries that should never be committed
+**/*.pt
+**/*.safetensors
+**/*.mp4
+**/*.npy
+**/*.parquet
