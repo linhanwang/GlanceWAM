@@ -2,6 +2,10 @@
 
 **Sparse test-time imagination for video-world-model VLAs.**
 
+[![arXiv](https://img.shields.io/badge/arXiv-2608.23927-b31b1b?logo=arxiv&logoColor=white)](https://arxiv.org/abs/2608.23927)
+[![Hugging Face](https://img.shields.io/badge/%F0%9F%A4%97%20Hugging%20Face-Data%20%26%20Checkpoints-ffd21e)](https://huggingface.co/datasets/LinhanWang/GlanceWAM)
+[![License: MIT](https://img.shields.io/badge/License-MIT-3da639)](LICENSE)
+
 ![GlanceWAM teaser](assets/teaser.png)
 
 *(a)* Prior world-action models couple future generation to the action chunk at control rate,
