@@ -59,7 +59,8 @@ eval_holdout_episodes="${EVAL_HOLDOUT_EPISODES:-0}"
 eval_interval="${EVAL_INTERVAL:-500}"
 eval_batch_size="${EVAL_BATCH_SIZE:-64}"
 action_horizon="${ACTION_HORIZON:-16}"
-extract_layers="${EXTRACT_LAYERS:-[19]}"
+# DiT taps feeding the action head. [5,12,19,26] (4 taps) is what the released checkpoints used.
+extract_layers="${EXTRACT_LAYERS:-[5,12,19,26]}"
 num_history_frames="${NUM_HISTORY_FRAMES:-1}"
 # Video horizon Hv = H_g (the goal-generation horizon), NATIVE rows (20 Hz -> 60 = 3 s). The
 # video branch predicts one frame at t+future_frame_idx; the goal head conditions on a frame
@@ -149,9 +150,8 @@ if [ "${max_episodes_per_task}" != "0" ]; then
   if [ "${episode_subsample_seed}" != "42" ]; then run_id_base="${run_id_base}s${episode_subsample_seed}"; fi
 fi
 if [ "${ema_enabled}" = "True" ] || [ "${ema_enabled}" = "true" ]; then run_id_base="${run_id_base}_ema"; fi
-# E7.0 multi-tap goal conditioning: tag by tap count so a mtap run never clobbers the
-# single-tap baseline (historical mtap4
-# rows pinned RUN_ID by hand because this tag did not exist yet). No-op at one tap.
+# Multi-tap goal conditioning: tag by tap count so runs with different tap sets never clobber
+# each other (the default 4-tap recipe gets _mtap4). No-op at one tap.
 n_taps=$(echo "${extract_layers}" | tr -cd ',' | wc -c); n_taps=$((n_taps + 1))
 if [ "${n_taps}" -gt 1 ]; then run_id_base="${run_id_base}_mtap${n_taps}"; fi
 run_id="${RUN_ID:-${run_id_base}}"

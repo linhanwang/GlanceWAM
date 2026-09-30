@@ -59,7 +59,8 @@ eval_holdout_episodes="${EVAL_HOLDOUT_EPISODES:-0}"
 eval_interval="${EVAL_INTERVAL:-500}"
 eval_batch_size="${EVAL_BATCH_SIZE:-32}"
 action_horizon="${ACTION_HORIZON:-8}"
-extract_layers="${EXTRACT_LAYERS:-[19]}"
+# DiT taps feeding the action head. [5,12,19,26] (4 taps) is what the released checkpoints used.
+extract_layers="${EXTRACT_LAYERS:-[5,12,19,26]}"
 num_history_frames="${NUM_HISTORY_FRAMES:-1}"
 # Video horizon Hv = H_g (the goal-generation horizon), NATIVE rows (20 Hz -> 48 = 2.4 s).
 # The video branch predicts one frame at t+future_frame_idx; the goal head conditions on a
